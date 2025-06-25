@@ -1,52 +1,56 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 import cv2
 import numpy as np
+from starlette.middleware.cors import CORSMiddleware
+import os
 
 app = FastAPI()
 
-@app.get("/")
-def root():
-    return {"status": "online"}
+# Permitir requisições de qualquer origem
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.post("/validate")
 async def validate_image(file: UploadFile = File(...)):
     try:
-        # Lê a imagem enviada
+        # Verifica se é imagem
+        if not file.content_type.startswith("image/"):
+            raise HTTPException(status_code=400, detail="Arquivo enviado não é uma imagem.")
+
         contents = await file.read()
-        nparr = np.frombuffer(contents, np.uint8)
-        img_recebida = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        np_arr = np.frombuffer(contents, np.uint8)
+        uploaded_img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
-        if img_recebida is None:
-            return JSONResponse(content={"erro": "Imagem inválida"}, status_code=400)
+        if uploaded_img is None:
+            raise HTTPException(status_code=400, detail="Erro ao ler a imagem enviada.")
 
-        # Lê a imagem modelo salva no projeto com nome 'modelo.jpg'
-        modelo = cv2.imread("modelo.jpeg")
+        # Caminho absoluto da imagem modelo
+        modelo_path = os.path.join(os.path.dirname(__file__), "modelo.jpg")
+        if not os.path.exists(modelo_path):
+            raise HTTPException(status_code=500, detail="Imagem modelo não encontrada no servidor.")
 
-        if modelo is None:
-            return JSONResponse(content={"erro": "Imagem modelo 'modelo.jpg' não encontrada"}, status_code=500)
+        modelo_img = cv2.imread(modelo_path)
+        if modelo_img is None:
+            raise HTTPException(status_code=500, detail="Erro ao carregar imagem modelo.")
 
-        # Redimensiona a imagem recebida para o tamanho do modelo
-        img_recebida = cv2.resize(img_recebida, (modelo.shape[1], modelo.shape[0]))
+        # Redimensiona ambas para comparação justa
+        resized_uploaded = cv2.resize(uploaded_img, (300, 300))
+        resized_modelo = cv2.resize(modelo_img, (300, 300))
 
-        # Calcula a diferença entre as imagens
-        diff = cv2.absdiff(modelo, img_recebida)
-        mean_diff = np.mean(diff)
+        # Compara diferença absoluta
+        diff = cv2.absdiff(resized_uploaded, resized_modelo)
+        mse = np.mean(diff ** 2)
 
-        LIMITE_TOLERANCIA = 20  # Valor de referência ajustável
+        LIMIAR = 500  # ajuste esse valor se necessário
+        conforme = mse < LIMIAR
 
-        if mean_diff > LIMITE_TOLERANCIA:
-            return {
-                "status": "fora_do_padrao",
-                "mensagem": "A imagem está fora do padrão do ambiente modelo.",
-                "diferenca": float(mean_diff)
-            }
-        else:
-            return {
-                "status": "ok",
-                "mensagem": "A imagem está dentro do padrão esperado.",
-                "diferenca": float(mean_diff)
-            }
+        return JSONResponse(content={"conforme": conforme, "mse": float(mse)})
 
     except Exception as e:
-        return JSONResponse(content={"erro": str(e)}, status_code=500)
+        raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
