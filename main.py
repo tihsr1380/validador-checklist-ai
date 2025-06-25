@@ -21,7 +21,7 @@ async def validate_image(file: UploadFile = File(...)):
             return JSONResponse(content={"erro": "Imagem inválida"}, status_code=400)
 
         # Lê a imagem modelo salva no projeto com nome 'modelo.jpg'
-        modelo = cv2.imread("modelo.jpg")
+        modelo = cv2.imread("modelo.jpeg")
 
         if modelo is None:
             return JSONResponse(content={"erro": "Imagem modelo 'modelo.jpg' não encontrada"}, status_code=500)
