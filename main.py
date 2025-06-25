@@ -1,52 +1,52 @@
-from fastapi import FastAPI, UploadFile, File
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, File, UploadFile
+from fastapi.responses import JSONResponse
 import cv2
 import numpy as np
 
 app = FastAPI()
 
-# Libera CORS para seu sistema PHP
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Em produção, restrinja ao seu domínio
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+@app.get("/")
+def root():
+    return {"status": "online"}
 
-def comparar_imagens(imagem1, imagem2):
-    # Redimensiona para o mesmo tamanho
-    imagem1 = cv2.resize(imagem1, (400, 400))
-    imagem2 = cv2.resize(imagem2, (400, 400))
+@app.post("/validate")
+async def validate_image(file: UploadFile = File(...)):
+    try:
+        # Lê a imagem enviada
+        contents = await file.read()
+        nparr = np.frombuffer(contents, np.uint8)
+        img_recebida = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-    # Converte para escala de cinza
-    cinza1 = cv2.cvtColor(imagem1, cv2.COLOR_BGR2GRAY)
-    cinza2 = cv2.cvtColor(imagem2, cv2.COLOR_BGR2GRAY)
+        if img_recebida is None:
+            return JSONResponse(content={"erro": "Imagem inválida"}, status_code=400)
 
-    # Calcula histograma e normaliza
-    hist1 = cv2.calcHist([cinza1], [0], None, [256], [0, 256])
-    hist2 = cv2.calcHist([cinza2], [0], None, [256], [0, 256])
-    hist1 = cv2.normalize(hist1, hist1).flatten()
-    hist2 = cv2.normalize(hist2, hist2).flatten()
+        # Lê a imagem modelo salva no projeto com nome 'modelo.jpg'
+        modelo = cv2.imread("modelo.jpg")
 
-    # Calcula correlação (quanto mais perto de 1, mais similar)
-    similaridade = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
+        if modelo is None:
+            return JSONResponse(content={"erro": "Imagem modelo 'modelo.jpg' não encontrada"}, status_code=500)
 
-    # ⚠️ LOG de debug:
-    print(f"[DEBUG] Similaridade entre imagem enviada e modelo: {similaridade:.4f}")
+        # Redimensiona a imagem recebida para o tamanho do modelo
+        img_recebida = cv2.resize(img_recebida, (modelo.shape[1], modelo.shape[0]))
 
-    # Considera conforme se similaridade for >= 0.80
-    conforme = similaridade >= 0.80
-    return conforme
+        # Calcula a diferença entre as imagens
+        diff = cv2.absdiff(modelo, img_recebida)
+        mean_diff = np.mean(diff)
 
-@app.post("/validar-imagem/")
-async def validar_imagem(file: UploadFile = File(...)):
-    contents = await file.read()
-    npimg = np.frombuffer(contents, np.uint8)
-    imagem_recebida = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
+        LIMITE_TOLERANCIA = 20  # Valor de referência ajustável
 
-    modelo = cv2.imread("modelo_quarto_limpo.jpg")
-    if modelo is None:
-        return {"erro": "Imagem modelo não encontrada no servidor."}
+        if mean_diff > LIMITE_TOLERANCIA:
+            return {
+                "status": "fora_do_padrao",
+                "mensagem": "A imagem está fora do padrão do ambiente modelo.",
+                "diferenca": float(mean_diff)
+            }
+        else:
+            return {
+                "status": "ok",
+                "mensagem": "A imagem está dentro do padrão esperado.",
+                "diferenca": float(mean_diff)
+            }
 
-    resultado = comparar_imagens(imagem_recebida, modelo)
-    return {"conforme": resultado}
+    except Exception as e:
+        return JSONResponse(content={"erro": str(e)}, status_code=500)
